@@ -2,109 +2,124 @@ import openpyxl
 from openpyxl.styles import Font
 import time
 
+class ExcelManager:
+    def __init__(self, path):
+        self.workbook = openpyxl.load_workbook(path)
+        self.sheet = self.workbook.active
 
-def read_file(path):
-    return openpyxl.load_workbook(path).active
+    def get_value(self, row, col):
+        return self.sheet.cell(row, col).value
 
+    def set_value(self, row, col, value):
+        self.sheet.cell(row, col).value = value
 
-def get_name(sheet, val):
-    for i in range(2, sheet.max_row + 1):
-        if sheet.cell(i, 1).value == val:
-            return sheet.cell(i, 2).value
-    return -1
+    def find_row_by_value(self, col, value):
+        for i in range(2, self.sheet.max_row + 1):
+            if self.get_value(i, col) == value:
+                return i
+        return -1
 
+    def delete_rows(self, start_row, end_row):
+        self.sheet.delete_rows(start_row, end_row)
 
-def find_place_by(sheet, val1, val2):
-    for i in range(2, sheet.max_row):
-        if sheet_place.cell(i, 4).value != 0 and (val1 == sheet.cell(i, 2).value) and (val2 == sheet.cell(i, 3).value):
-            sheet_place.cell(i, 4).value -= 1
-            return True
+    def save(self, path):
+        self.workbook.save(path)
 
+class PlacementManager:
+    def __init__(self, pref_path, rang_path, hopital_path, service_path, place_path):
+        self.pref_sheet = ExcelManager(pref_path)
+        self.rang_sheet = ExcelManager(rang_path)
+        self.hopital_sheet = ExcelManager(hopital_path)
+        self.service_sheet = ExcelManager(service_path)
+        self.place_sheet = ExcelManager(place_path)
+        self.stage = {"Matricule": [], "Hopital": [], "Service": []}
 
-def find_place(sheet):
-    for j in range(2, sheet.max_row):
-        if sheet_place.cell(j, 4).value != 0:
-            sheet_place.cell(j, 4).value -= 1
-            return j
+    def get_name(self, sheet_manager, val):
+        row = sheet_manager.find_row_by_value(1, val)
+        if row != -1:
+            return sheet_manager.get_value(row, 2)
+        return "Unknown"
 
+    def find_place_by(self, hospital_id, service_id):
+        for i in range(2, self.place_sheet.sheet.max_row + 1):
+            if self.place_sheet.get_value(i, 4) != 0 and \
+               self.place_sheet.get_value(i, 2) == hospital_id and \
+               self.place_sheet.get_value(i, 3) == service_id:
+                self.place_sheet.set_value(i, 4, self.place_sheet.get_value(i, 4) - 1)
+                return True
+        return False
 
-def get_index_blank(sheet):
-    for i in range(2, sheet_pref.max_row):
-        if not sheet_pref.cell(i, sheet_pref.max_column).value:
-            return i
+    def find_general_place(self):
+        for i in range(2, self.place_sheet.sheet.max_row + 1):
+            if self.place_sheet.get_value(i, 4) != 0:
+                self.place_sheet.set_value(i, 4, self.place_sheet.get_value(i, 4) - 1)
+                return i
+        return -1
 
+    def allocate_stages(self):
+        for row in range(2, self.rang_sheet.sheet.max_row + 1):
+            matricule = self.rang_sheet.get_value(row, 1)
+            preferences = {}
 
-sheet_pref = read_file("Annexe 1 - préférences.xlsx")
-sheet_rang = read_file("Annexe 2 - classement.xlsx")
-sheet_hopital = read_file("Annexe 3 - hopitaux.xlsx")
-sheet_service = read_file("Annexe 4 - services.xlsx")
-sheet_place = read_file("Annexe 5 - places.xlsx")
-sheet_pref.delete_rows(4223, sheet_pref.max_row)
-stage = {}
-matricules = []
-start_time = time.time()
+            # Gather preferences for the current matricule
+            for row_pref in range(2, self.pref_sheet.sheet.max_row + 1):
+                if self.pref_sheet.get_value(row_pref, 3) == matricule:
+                    preference_id = self.pref_sheet.get_value(row_pref, 6)
+                    preferences[preference_id] = row_pref
 
-for row in range(2,  237+ 1):
-    matricule = (sheet_rang.cell(row, 1).value)
+            preferences = dict(sorted(preferences.items()))
+            flag = False
+
+            for pref_id in preferences.values():
+                hospital_id = self.pref_sheet.get_value(pref_id, 4)
+                service_id = self.pref_sheet.get_value(pref_id, 5)
+                preference_type = self.pref_sheet.get_value(pref_id, 7)
+
+                if preference_type == 1 or pref_id == list(preferences.values())[-1]:
+                    if self.find_place_by(hospital_id, service_id):
+                        self.stage["Matricule"].append(matricule)
+                        self.stage["Hopital"].append(self.get_name(self.hopital_sheet, hospital_id))
+                        self.stage["Service"].append(self.get_name(self.service_sheet, service_id))
+                        break
+
+            if not preferences:
+                general_place_row = self.find_general_place()
+                if general_place_row != -1:
+                    hospital_id = self.place_sheet.get_value(general_place_row, 2)
+                    service_id = self.place_sheet.get_value(general_place_row, 3)
+                    self.stage["Matricule"].append(matricule)
+                    self.stage["Hopital"].append(self.get_name(self.hopital_sheet, hospital_id))
+                    self.stage["Service"].append(self.get_name(self.service_sheet, service_id))
+
+    def save_results(self, output_path):
+        wb_stage = openpyxl.Workbook()
+        sheet_stage = wb_stage.active
+
+        headers = ["Matricule", "Hopital", "Service"]
+        for col, header in enumerate(headers, 1):
+            sheet_stage.cell(1, col, header).font = Font(size=12, bold=True)
+            sheet_stage.column_dimensions[chr(64 + col)].width = 20
+            sheet_stage.cell(1, col).value = header
+
+        for i, matricule in enumerate(self.stage["Matricule"], start=2):
+            sheet_stage.cell(i, 1).value = matricule
+            sheet_stage.cell(i, 2).value = self.stage["Hopital"][i - 2]
+            sheet_stage.cell(i, 3).value = self.stage["Service"][i - 2]
+
+        wb_stage.save(output_path)
+
+if __name__ == "__main__":
+    start_time = time.time()
     
-    
-    
-    hopital = []
-    service = []
-    typePref = []
-    pref = {}
-    flag = False
-    c = 0
+    placement_manager = PlacementManager(
+        "./src/Annexe 1 - préférences.xlsx",
+        "./src/Annexe 2 - classement.xlsx",
+        "./src/Annexe 3 - hopitaux.xlsx",
+        "./src/Annexe 4 - services.xlsx",
+        "./src/Annexe 5 - places.xlsx"
+    )
 
-    for row1 in range(2, sheet_pref.max_row):
-        if matricule == sheet_pref.cell(row1, 3).value:
-            pref[sheet_pref.cell(row1, 6).value] = sheet_pref.cell(row1, 1).value
+    placement_manager.allocate_stages()
+    placement_manager.save_results("Stages_Affectations1.xlsx")
 
-    pref = dict(sorted(pref.items()))
-
-    for pref_id in pref.values():
-        for row2 in range(2, sheet_pref.max_row):
-            if pref_id == sheet_pref.cell(row2, 1).value:
-                hopital.append(sheet_pref.cell(row2, 4).value)
-                service.append(sheet_pref.cell(row2, 5).value)
-                typePref.append(sheet_pref.cell(row2, 7).value)
-
-    for h, s, t in zip(hopital, service, typePref):
-        c += 1
-        if t == 1 or c == len(pref):
-            if find_place_by(sheet_place, h, s):
-                stage.setdefault("Matricule", []).append(matricule)
-                stage.setdefault("Hopital", []).append(get_name(sheet_hopital, h))
-                stage.setdefault("Service", []).append(get_name(sheet_service, s))
-                flag = True
-                break
-    if not pref or flag or matricule not in stage['Matricule']:
-        if find_place(sheet_place):
-            stage.setdefault("Matricule", []).append(matricule)
-            stage.setdefault("Hopital", []).append(get_name(sheet_hopital, sheet_place.cell(find_place(sheet_place), 2).value))
-            stage.setdefault("Service", []).append(get_name(sheet_service, sheet_place.cell(find_place(sheet_place), 3).value))
-
-
-    print('---------------------------------------------------------------')
-
-print(stage)
-
-wb_stage = openpyxl.Workbook()
-sheet_stage = wb_stage.active
-sheet_stage["A1"] = "Matricule"
-sheet_stage["A1"].font = Font(size=12, bold=True)
-sheet_stage.column_dimensions['A'].width = 10
-sheet_stage["B1"] = "Hopital"
-sheet_stage["B1"].font = Font(size=12, bold=True)
-sheet_stage.column_dimensions['B'].width = 30
-sheet_stage["C1"] = "Service"
-sheet_stage["C1"].font = Font(size=12, bold=True)
-sheet_stage.column_dimensions['C'].width = 20
-
-row = 1
-for val in stage.values():
-    for j in range(0, len(val)):
-        sheet_stage.cell(j + 2, row).value = val[j]
-    row += 1
-print("--- %s seconds ---" % (time.time() - start_time))
-wb_stage.save("Stages_Affectations.xlsx")
+    print(f"--- {time.time() - start_time} seconds ---")
